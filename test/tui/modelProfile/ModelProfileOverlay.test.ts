@@ -34,6 +34,7 @@ function stubActions(): TuiActions {
     selectModel: vi.fn(),
     closeModelPicker: vi.fn(),
     setActiveModel: vi.fn(),
+    applyModelToSession: vi.fn(),
     openTrajectory: vi.fn(),
     closeTrajectory: vi.fn(),
     openContext: vi.fn(),
@@ -124,7 +125,7 @@ describe('ModelProfileOverlay model picker', () => {
     expect(lines.some(line => /○ deepseek-chat/.test(line))).toBe(true)
   })
 
-  it('moves the cursor and activates the highlighted model on enter', () => {
+  it('moves the cursor and switches this session to the highlighted model on enter', () => {
     const actions = stubActions()
     const { overlay, store } = openWith(actions, {
       providers: [provider({})],
@@ -138,7 +139,24 @@ describe('ModelProfileOverlay model picker', () => {
     expect(actions.selectModel).toHaveBeenLastCalledWith(1)
 
     overlay.handleInput(ENTER)
+    // enter performs a live switch (persist + remount), not just a default save.
+    expect(actions.applyModelToSession).toHaveBeenCalledWith('deepseek', 'deepseek-reasoner')
+    expect(actions.setActiveModel).not.toHaveBeenCalled()
+  })
+
+  it('sets the highlighted model as the default only, without switching the session, on d', () => {
+    const actions = stubActions()
+    const { overlay, store } = openWith(actions, {
+      providers: [provider({})],
+      view: 'picker',
+      picker: { route: 'deepseek', selected: 0 },
+    })
+    wireSelectModel(store, actions)
+
+    overlay.handleInput(DOWN)
+    overlay.handleInput('d')
     expect(actions.setActiveModel).toHaveBeenCalledWith('deepseek', 'deepseek-reasoner')
+    expect(actions.applyModelToSession).not.toHaveBeenCalled()
   })
 
   it('clamps the selection at the catalog bounds', () => {
@@ -178,6 +196,7 @@ describe('ModelProfileOverlay model picker', () => {
 
     expect(actions.closeModelPicker).toHaveBeenCalledTimes(1)
     expect(actions.setActiveModel).not.toHaveBeenCalled()
+    expect(actions.applyModelToSession).not.toHaveBeenCalled()
   })
 
   it('opens the picker from the provider list on s', () => {

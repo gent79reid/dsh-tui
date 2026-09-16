@@ -456,10 +456,20 @@ async function run(ctx: Context, config: Config, io: TuiIo, mounted: { instance?
       return
     }
     const { settings: settingsSvc, credentials: credentialsSvc, llm: llmSvc } = services
-    const configurable = llmSvc.listConfigurableProviders()
+    const configurableAll = llmSvc.listConfigurableProviders()
     const live = new Set(llmSvc.listProviders().map(provider => provider.id))
     const descriptors = settingsSvc.describe({ redactSecrets: true })
     const byNs = new Map<string, (typeof descriptors)[number]>(descriptors.map(descriptor => [descriptor.ns, descriptor]))
+    // Only surface `github-copilot` in the `/model` picker — plus any provider the
+    // user has actually configured (a settings override) so an already-set-up
+    // route never silently disappears from the list.
+    const PROVIDER_ALLOWLIST = new Set(['github-copilot'])
+    const configurable = configurableAll.filter(entry => {
+      if (PROVIDER_ALLOWLIST.has(entry.provider)) return true
+      const descriptor = byNs.get(entry.settingsNs)
+      const userValue = descriptor === undefined ? undefined : getAtPath(descriptor.user, entry.settingsPath)
+      return userValue !== undefined
+    })
     const rows: ProviderRow[] = []
     for (const entry of configurable) {
       const descriptor = byNs.get(entry.settingsNs)
@@ -1469,6 +1479,27 @@ async function run(ctx: Context, config: Config, io: TuiIo, mounted: { instance?
           .catch((error: unknown) => {
             store.setNotice(`failed to set default model: ${error instanceof Error ? error.message : String(error)}`)
           })
+      },
+      applyModelToSession(provider, model) {
+        // A running agent's LLM route is fixed at creation, and the status bar
+        // is painted from the selection captured at mount — so saving a new
+        // default alone never changes the *live* session. To actually switch it
+        // we persist the selection, then remount the current session (the same
+        // path `/resume` uses): `attachSession` re-reads `currentSelection()`,
+        // so the new agent + status bar adopt the new model. History is flushed
+        // and reloaded from persistence, so the transcript is preserved.
+        store.updateModelProfile({ activeModel: { provider, model }, view: 'list', picker: undefined, error: undefined })
+        const sessionId = String(agent.session.id)
+        void (async () => {
+          try {
+            await defaultModel.saveSelection({ provider, model })
+          } catch (error: unknown) {
+            store.setNotice(`failed to set model: ${error instanceof Error ? error.message : String(error)}`)
+            return
+          }
+          await resumeSession(sessionId)
+          current.store.setNotice(`switched this session to ${provider}/${model}`)
+        })()
       },
 
       openTrajectory() {

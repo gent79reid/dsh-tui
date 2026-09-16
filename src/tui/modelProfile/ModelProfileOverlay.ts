@@ -183,7 +183,7 @@ export class ModelProfileOverlay implements Component {
       lines.push(index === selected ? invert(text) : text)
     })
     if (models.length === 0) lines.push(muted('No models in this provider’s catalog.'))
-    lines.push(muted('↑↓ select · enter set active model · esc back'))
+    lines.push(muted('↑↓ select · enter switch this session now · d set default only · esc back'))
     return lines
   }
 
@@ -194,6 +194,12 @@ export class ModelProfileOverlay implements Component {
     }
     const row = mp.providers?.find(candidate => candidate.route === picker.route)
     if (row === undefined || row.models.length === 0) return
+    if (data === 'd') {
+      // Set as the default for future sessions without touching the live one.
+      const model = row.models[clampModelIndex(picker.selected, row.models.length)]
+      if (model !== undefined) this.actions.setActiveModel(picker.route, model.id)
+      return
+    }
     if (matchesKey(data, Key.up)) {
       this.actions.selectModel(picker.selected - 1)
       return
@@ -204,7 +210,8 @@ export class ModelProfileOverlay implements Component {
     }
     if (matchesKey(data, Key.enter)) {
       const model = row.models[clampModelIndex(picker.selected, row.models.length)]
-      if (model !== undefined) this.actions.setActiveModel(picker.route, model.id)
+      // Live switch: persist + remount the current session onto this model.
+      if (model !== undefined) this.actions.applyModelToSession(picker.route, model.id)
     }
   }
 

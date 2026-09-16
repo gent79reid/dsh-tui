@@ -73,6 +73,13 @@ export interface TuiActions {
   closeModelPicker(): void
   /** Save `{provider, model}` as the Agent's default model selection. */
   setActiveModel(provider: string, model: string): void
+  /**
+   * Save the selection, then remount the current session so the live agent and
+   * status bar adopt the new model. A running agent's LLM route is fixed at
+   * creation, so switching the *live* session requires a remount (the same path
+   * `/resume` uses); history is flushed and reloaded, so the transcript is kept.
+   */
+  applyModelToSession(provider: string, model: string): void
 
   /** Open the `/trajectory` ledger overlay. */
   openTrajectory(): void
