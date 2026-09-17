@@ -21,16 +21,16 @@ An open-source terminal front door for [DeepSeek Harness](https://github.com/dee
 
 ## Features
 
-- **Status bar** — session id, active LLM provider/model, current agent preset, live run state with spinner, queued-message count, and logged event count.
-- **Stats line** — turn/step counts, LLM/tool wall time, TTFT and decode tok/s, cache-hit %, billed tokens, and a compact context-usage summary; sections hide themselves until there's data.
+- **Compact metadata footer** — session id, provider/model, preset, run state, permission and thinking modes, event count, turn/step metrics, token usage, and context pressure sit quietly below the composer; sections hide themselves until there is data.
 - **`/model` provider management** — switch the active model by picking from a provider's catalog, and add, edit, or delete custom LLM providers (route, base URL, API key, model discovery) without leaving the terminal.
 - **Agent presets** — start a fresh session on a given preset with `--agent-preset`, or browse and switch presets from `/presets` (fixed once the session's first turn has run).
 - **Session inspectors** — `/trajectory` for a turn/step event ledger with a detail view and filtering, `/context` for a context-window usage breakdown, `/plugins` for the loaded Cordis plugin tree and fiber state.
-- **Collapsed tool calls with a live spinner** — a running tool call shows as a single spinner line in the prompt area; once its result lands, it settles into one collapsed `✓`/`✖` transcript line rather than an inline multi-line card.
+- **Grouped tool activity** — contiguous calls settle in place inside compact transcript blocks with a verb/count heading (`Read, searched 3 files, 2 searches`), concise presenter-aware detail, command timing, and a live spinner for pending entries. Only the newest four entries stay inline; older entries fold behind an `earlier items hidden` count.
 - **Tool Cards overlay** — `/tools` or `Ctrl+O` opens a scrollable browser over the session's tool calls/results, each shown expanded to its full presentation by default (`Enter`/`Space` collapses a card back to its title).
-- **Reasoning display** — a model's reasoning/thinking content never floods the screen: an animated `✦ thinking` line stands in for it while still streaming, and it collapses to a one-line `✦ think · …` summary ahead of the visible answer once settled in the transcript; the full text is always available via `/trajectory`.
+- **Reasoning display** — an animated `✦ thinking` line stands in for reasoning while it streams; once settled, a short preview appears in a bordered `Thought` block ahead of the answer. `Ctrl+T` expands every Thought block to the model's full reasoning body — the whole text in the transcript, and a live tail of it while a step is still thinking — and collapses them back again. The full text is also always in `/trajectory`.
 - **Markdown rendering** — assistant text with an unambiguous Markdown signal (fenced code, headers, lists, blockquotes, rules, tables, links, bold/strikethrough, inline code) is styled for the terminal; plain prose passes through untouched.
-- **Permission preset cycling** — `Shift+Tab` cycles `read-only` / `workspace-write` / `danger-full-access` / `custom`, shown live in the prompt area.
+- **Thinking-effort cycling** — `Shift+Tab` cycles the selected model's reasoning/thinking effort (pi-agent-style), shown live in the prompt area as `✦ thinking: <effort>`; the change applies to the running session immediately and is persisted as the default for future sessions. Hidden for models that expose no adjustable effort.
+- **Permission preset cycling** — `Alt+P` cycles `read-only` / `workspace-write` / `danger-full-access` / `custom`, shown live in the prompt area.
 - **In-terminal approvals and questions** — a tool call parked on an `ask` permission decision is answered right in the terminal (allow once / reject), and `ask_user_question`/plan-mode's plan review present as an option list with multi-select and free-text "Other…", `esc` to skip. A desktop notification (OSC 9 — the same mechanism Claude Code's own CLI uses) fires once whenever such a wait starts, so terminals that support it (Ghostty, Kitty, iTerm2 with escape-sequence alerts enabled) can flag it while you're looking elsewhere; terminals without OSC 9 support just ignore it.
 - **Plan mode** — `/plan [message]` enters plan mode (optionally steering a first message under it), `/plan off` leaves it; a model-proposed plan lands in the existing question flow as an Approve/Keep-planning review.
 - **Goal mode** — `/goal <objective>` sets a long-running goal shown as a live dock strip (phase + objective, hiding on completion like the web portal); `/goal clear|edit <objective>|pause|resume` manages it, and automatic continuation rounds keep running in this same session while the goal is active and armed.
@@ -44,7 +44,7 @@ An open-source terminal front door for [DeepSeek Harness](https://github.com/dee
 - **`@`-file-mention autocomplete** — typing `@` opens a fuzzy-filtered dropdown of repo files (`git ls-files`, or a bounded walk outside a git repo); `Tab`/`Enter` inserts the picked path at the cursor.
 - **Update hint** — a best-effort startup check against the npm registry shows a persistent dock line with the upgrade command once a newer `@tomowang/dsh-tui` is published; any network failure or timeout is silent.
 - **Terminal window/tab title** — once the session gets a title (a short first-message summary, when the profile composes `dsh-session-title`), the terminal's title bar shows `<session title> — dsh-tui`; it stays `dsh-tui` before that or without the service mounted.
-- **Full-screen scrollable transcript** — the interface owns the terminal's alternate screen buffer rather than growing native scrollback, with mouse wheel/trackpad and `PageUp`/`PageDown` scrolling and an auto-follow-the-bottom transcript; the last screenful is flattened back into your terminal's normal scrollback on exit. `/trajectory` remains the tool for browsing further back than the viewport shows.
+- **Compact full-screen transcript** — a small two-line session heading replaces a large startup card; the interface then uses terminal-native spacing, weight, indentation, and thin borders within its alternate-screen viewport. Mouse wheel/trackpad and `PageUp`/`PageDown` scroll it, and `/trajectory` remains the full-history inspector.
 - Every overlay degrades to a plain notice instead of failing the whole TUI when its backing service isn't mounted in a given profile.
 
 ## Install
@@ -100,7 +100,9 @@ Any row `--dump-config` prints — the model adapter, tool set, sandbox policy, 
 | mouse wheel/trackpad, `PageUp`/`PageDown` | scroll the transcript; auto-follows new output again once you're back at the bottom |
 | `Ctrl+C` | cancel a running turn; on an idle empty line, press twice within 2s to exit |
 | `Ctrl+D` | forward-delete; on an idle empty line, press twice within 2s to exit |
-| `Shift+Tab` | cycle the permission preset (`read-only` / `workspace-write` / `danger-full-access` / `custom`) |
+| `Shift+Tab` | cycle the selected model's thinking/reasoning effort (applied live, persisted as the default) |
+| `Ctrl+T` | show the model's full reasoning body in every `Thought` block, or collapse them back to the one-line preview |
+| `Alt+P` | cycle the permission preset (`read-only` / `workspace-write` / `danger-full-access` / `custom`) |
 | `Ctrl+O` | open the Tool Cards overlay; `↑`/`↓` select a card, `Enter`/`Space` expand or collapse, `PgUp`/`PgDn`/`Home`/`End` scroll an expanded card, `Esc`/`q`/`Ctrl+O` close |
 | `!` (on an empty prompt) | enter shell mode: Enter runs the line as a local shell command; `Esc`/backspace-on-empty exits back to normal mode |
 | `@` | open the file-mention dropdown; `↑`/`↓` to move, `Tab`/`Enter` to insert the path, `Esc` to dismiss |

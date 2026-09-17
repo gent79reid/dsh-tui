@@ -251,6 +251,19 @@ describe('TuiStore setters without an equality guard', () => {
     expect(store.getSnapshot().permission).toEqual({ current: 'default', names: ['default'] })
   })
 
+  it('toggleReasoningDetail starts collapsed and flips on every call', () => {
+    const store = new TuiStore({ events: [] })
+    const listener = vi.fn()
+    store.subscribe(listener)
+
+    expect(store.getSnapshot().reasoningExpanded).toBe(false)
+    store.toggleReasoningDetail()
+    expect(store.getSnapshot().reasoningExpanded).toBe(true)
+    store.toggleReasoningDetail()
+    expect(store.getSnapshot().reasoningExpanded).toBe(false)
+    expect(listener).toHaveBeenCalledTimes(2)
+  })
+
   it('setStats updates the field and notifies', () => {
     const store = new TuiStore({ events: [] })
     const stats = { sessionStats: undefined, tokenUsage: undefined, contextPressure: undefined, contextBreakdown: undefined }

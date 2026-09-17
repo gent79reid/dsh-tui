@@ -6,8 +6,8 @@
  *
  * Two different update strategies are used, deliberately:
  *
- * - The live region (notice, queued preview, streaming text, status bar,
- *   stats line, permission indicator, update hint) is a `DynamicText`/`Spinner` per row,
+ * - The live region (notice, queued preview, streaming text, compact metadata
+ *   footer, update hint) is a `DynamicText`/`Spinner` per row,
  *   each pulling straight from `store.getSnapshot()` at render time. There is
  *   no manual `setText` bookkeeping to keep in sync — every repaint just
  *   reflects whatever the store currently holds. The approve/reject panel
@@ -50,13 +50,14 @@ import {
   type OverlayHandle,
 } from '@earendil-works/pi-tui'
 import type { RenderOptions } from '../render.js'
-import { formatEvent, formatPendingToolCalls, formatShellRun, formatShellRunLive, formatStreamingText } from '../render.js'
+import { formatEvent, formatShellRun, formatShellRunLive, formatStreamingText, reasoningOf } from '../render.js'
 import { buildBannerText } from './bannerText.js'
 import { buildContextLine, buildStatsLine } from './statsFormat.js'
-import { buildAgentsStripText, buildGoalBarText, buildPermissionText, buildQueuedText, buildStatusBarText, buildTerminalTitle, buildUpdateHintText } from './liveText.js'
-import { createTranscriptLine, DynamicText, padTranscriptText } from './text.js'
+import { buildAgentsStripText, buildGoalBarText, buildPermissionText, buildQueuedText, buildReasoningEffortText, buildStatusBarText, buildTerminalTitle, buildUpdateHintText } from './liveText.js'
+import { createTranscriptLine, DynamicText, padTranscriptText, StatefulTranscriptLine, transcriptContentWidth } from './text.js'
 import { CustomEditor } from './CustomEditor.js'
 import { Spinner } from './Spinner.js'
+import { ToolActivityBlock } from './ToolActivityBlock.js'
 import type { TuiActions } from './actions.js'
 import type { TuiState, TuiStore } from './store.js'
 import { theme, fg } from './theme.js'
@@ -96,6 +97,14 @@ export interface MountOptions {
 export interface TuiHandle {
   unmount(options?: { preserveScreen?: boolean }): void
   waitUntilExit(): Promise<void>
+}
+
+/** The `│ ` border glyph every Thought-block row carries, excluded from the width its reasoning body wraps to. */
+const THOUGHT_BORDER_WIDTH = 2
+
+/** Width an expanded reasoning body wraps to, so its bordered rows land on the same column as the rest of the transcript. */
+function reasoningWidth(width: number): number {
+  return Math.max(8, transcriptContentWidth(width) - THOUGHT_BORDER_WIDTH)
 }
 
 /** Full-screen panel anchored at the top — every overlay's uniform placement. */
@@ -173,14 +182,14 @@ class TranscriptArea implements Component {
   }
 
   render(width: number): string[] {
-    const viewingChild = this.store.getSnapshot().viewingChild
+    const { viewingChild, reasoningExpanded } = this.store.getSnapshot()
     if (viewingChild === undefined) return this.documentContainer.render(width)
     const { label, events, live, busy, error } = viewingChild
     const statusTag = live ? success('● live') : muted('finished')
     const lines: string[] = [`${bold(secondary(`Subagent — ${label}`))} ${statusTag}`]
     if (error !== undefined) lines.push(errorColor(error))
     if (busy && events.length === 0) lines.push(muted('Loading…'))
-    lines.push(...buildAgentDetailLines(events, this.getTool))
+    lines.push(...buildAgentDetailLines(events, this.getTool, { expanded: reasoningExpanded, width: reasoningWidth(width) }))
     if (events.length === 0 && !busy && error === undefined) lines.push(muted('No transcript yet.'))
     // padTranscriptText both wraps to width (unlike the raw lines above, a
     // long line here would otherwise overflow the terminal edge — this is
@@ -279,6 +288,7 @@ class TuiApp implements TuiHandle {
   private readonly spinner: Spinner
   private appendedEventsCount = 0
   private appendedShellCount = 0
+  private currentToolActivity: ToolActivityBlock | undefined
   private currentOverlayKind: TuiState['overlay']['kind'] = 'none'
   private overlayHandle: OverlayHandle | undefined
   private readonly approvalSlot = new ApprovalSlot()
@@ -294,7 +304,10 @@ class TuiApp implements TuiHandle {
     this.spinner = new Spinner(this.tui)
 
     this.documentContainer.addChild(
-      new DynamicText(width => buildBannerText({ version: options.version, provider: options.provider, model: options.model, cwd: options.cwd }, width)),
+      new DynamicText(width => padTranscriptText(
+        buildBannerText({ version: options.version, provider: options.provider, model: options.model, cwd: options.cwd }, width),
+        width,
+      ).join('\n')),
     )
     const transcriptArea = new TranscriptArea(this.documentContainer, store, options.getTool)
     const transcriptScrollView = new ScrollView(transcriptArea, { follow: 'end', primary: true, overscroll: 'chain' })
@@ -317,14 +330,12 @@ class TuiApp implements TuiHandle {
     const goalText = new DynamicText(() => buildGoalBarText(store.getSnapshot().goal))
     const queuedText = new DynamicText(() => buildQueuedText(store.getSnapshot().queued))
     const streamingText = new DynamicText(width => {
-      const streaming = store.getSnapshot().streaming
+      const { streaming, reasoningExpanded } = store.getSnapshot()
       if (streaming === undefined) return ''
-      const text = formatStreamingText(streaming.text, streaming.reasoningText, this.spinner.current()) ?? ''
-      return padTranscriptText(text, width).join('\n')
-    })
-    const pendingToolCallsText = new DynamicText(width => {
-      const { pendingToolCalls } = store.getSnapshot()
-      const text = formatPendingToolCalls(pendingToolCalls, this.spinner.current(), options.getTool)
+      const text = formatStreamingText(streaming.text, streaming.reasoningText, this.spinner.current(), {
+        expanded: reasoningExpanded,
+        width: reasoningWidth(width),
+      }) ?? ''
       return padTranscriptText(text, width).join('\n')
     })
     const shellRunLiveText = new DynamicText(width => {
@@ -332,9 +343,13 @@ class TuiApp implements TuiHandle {
       if (run === undefined) return ''
       return padTranscriptText(formatShellRunLive(run.command, run.output), width).join('\n')
     })
-    const statusBarText = new DynamicText(() => {
+    // Cursor-style quiet footer: persistent session/model/mode/stats metadata
+    // lives below the composer instead of competing with transient activity
+    // above it. Tool activity itself is projected into mutable transcript
+    // blocks, so this dock only carries state that has no durable log row.
+    const metadataText = new DynamicText(() => {
       const state = store.getSnapshot()
-      return buildStatusBarText({
+      const status = buildStatusBarText({
         sessionId: options.sessionId,
         provider: options.provider,
         model: options.model,
@@ -344,6 +359,15 @@ class TuiApp implements TuiHandle {
         eventCount: state.events.length,
         spinnerChar: this.spinner.current(),
       })
+      const modes = [
+        buildPermissionText(state.permission),
+        buildReasoningEffortText(state.reasoningEffort),
+      ].filter(text => text !== '').join(muted(' · '))
+      const stats = buildStatsLine(state.stats.sessionStats, state.stats.tokenUsage)
+      const context = buildContextLine(state.stats.contextPressure)
+      return [status, modes, [stats, context].filter(group => group !== '').join('| ')]
+        .filter(line => line !== '')
+        .join('\n')
     })
     // Docked directly below the composer, Claude Code CLI-style — a
     // solid/hollow-circle switcher for the session's subagent children, kept
@@ -353,14 +377,7 @@ class TuiApp implements TuiHandle {
       const state = store.getSnapshot()
       return buildAgentsStripText(state.agentsStrip, state.viewingChild?.childId, this.spinner.current())
     })
-    const permissionText = new DynamicText(() => buildPermissionText(store.getSnapshot().permission))
     const updateHintText = new DynamicText(() => buildUpdateHintText(options.version, store.getSnapshot().updateHint))
-    const statsLineText = new DynamicText(() => {
-      const stats = store.getSnapshot().stats
-      const line = buildStatsLine(stats.sessionStats, stats.tokenUsage)
-      const context = buildContextLine(stats.contextPressure)
-      return [line, context].filter(group => group !== '').join('| ')
-    })
 
     const dock = new VStack(
       [
@@ -368,15 +385,12 @@ class TuiApp implements TuiHandle {
         goalText,
         queuedText,
         streamingText,
-        pendingToolCallsText,
         shellRunLiveText,
-        statusBarText,
         this.approvalSlot,
         this.editor,
         agentsStripText,
-        permissionText,
+        metadataText,
         updateHintText,
-        statsLineText,
       ],
       { gap: 0 },
     )
@@ -430,7 +444,35 @@ class TuiApp implements TuiHandle {
     if (state.events.length > this.appendedEventsCount) {
       for (let i = this.appendedEventsCount; i < state.events.length; i++) {
         const event = state.events[i]
-        const formatted = formatEvent(event, { replay: event.seq <= state.replayThrough, getTool, getToolCall })
+        if (event.type === 'tool/call' || event.type === 'tool/result') {
+          if (this.currentToolActivity === undefined) {
+            this.currentToolActivity = new ToolActivityBlock(
+              { replay: event.seq <= state.replayThrough, getTool, getToolCall },
+              () => this.spinner.current(),
+            )
+            this.documentContainer.addChild(this.currentToolActivity)
+          }
+          this.currentToolActivity.append(event)
+          continue
+        }
+        this.currentToolActivity = undefined
+        const replay = event.seq <= state.replayThrough
+        // A step that carried reasoning is the one non-tool transcript row
+        // whose content isn't fixed at append time: `Ctrl+T` re-renders every
+        // Thought block between its preview and the full body.
+        if (event.type === 'assistant/message' && reasoningOf(event.data.message.content) !== '') {
+          this.documentContainer.addChild(new StatefulTranscriptLine(
+            () => this.options.store.getSnapshot().reasoningExpanded,
+            (expanded, width) => formatEvent(event, {
+              replay,
+              getTool,
+              getToolCall,
+              reasoning: { expanded, width: reasoningWidth(width) },
+            }) ?? '',
+          ))
+          continue
+        }
+        const formatted = formatEvent(event, { replay, getTool, getToolCall })
         if (formatted !== undefined && formatted !== '') this.documentContainer.addChild(createTranscriptLine(formatted))
       }
       this.appendedEventsCount = state.events.length

@@ -153,6 +153,30 @@ export interface PermissionState {
   readonly names: readonly string[]
 }
 
+/** One selectable reasoning effort for the active model, mirroring `LlmReasoningEffortInfo`. */
+export interface ReasoningEffortOption {
+  /** Opaque effort id accepted by `GenerateOptions.reasoningEffort`. */
+  readonly id: string
+  /** Human-readable effort name for the live indicator. */
+  readonly name: string
+}
+
+/**
+ * The live agent's current thinking/reasoning-effort selection, resolved from
+ * the selected model's declared efforts (`ctx.llm.resolveModelInfo`). `Shift+Tab`
+ * cycles it (`cycleReasoningEffort`); the indicator is hidden entirely when the
+ * model exposes no efforts (`options` empty) or before the resolve lands
+ * (`undefined`).
+ */
+export interface ReasoningEffortState {
+  /** Selected effort id, or `undefined` while following the model/provider default. */
+  readonly current: string | undefined
+  /** Available efforts in adapter display order; empty hides the indicator. */
+  readonly options: readonly ReasoningEffortOption[]
+  /** The model's own default effort, shown when the selection follows it. */
+  readonly defaultEffort: string | undefined
+}
+
 /** The session's current agent preset, folded from `ctx.agentPresets`. */
 export interface PresetState {
   /** Display label of the resolved preset, or `undefined` when the deployment composes none. */
@@ -210,6 +234,10 @@ export interface TuiState {
   readonly overlay: Overlay
   /** Current permission preset, or `undefined` when `ctx.permissionPresets` isn't composed in this profile. */
   readonly permission: PermissionState | undefined
+  /** Current thinking-effort selection for the live model, or `undefined` when unresolved / `ctx.llm` isn't composed. The indicator also stays hidden when the resolved model exposes no efforts (`options` empty). */
+  readonly reasoningEffort: ReasoningEffortState | undefined
+  /** Whether reasoning bodies render in full rather than as a one-line preview; toggled by `Ctrl+T` and applied to every Thought block at once, settled and in-flight alike. */
+  readonly reasoningExpanded: boolean
   /** The session's current goal (the 'goal' session projection: whole value, or `null` before the first create / after a clear tombstone), or `undefined` when the projection unit isn't composed in this profile. */
   readonly goal: GoalProjection | null | undefined
   /** The session's current title (the 'title' session projection: last-wins `session/title` text, or `null` before the first one lands), or `undefined` when `dsh-session-title` isn't composed in this profile. Drives the terminal window/tab title — see `TuiApp`'s `updateTerminalTitle`. */
@@ -290,6 +318,8 @@ export class TuiStore {
       notice: undefined,
       overlay: CLOSED_OVERLAY,
       permission: undefined,
+      reasoningEffort: undefined,
+      reasoningExpanded: false,
       goal: undefined,
       title: undefined,
       stats: EMPTY_STATS,
@@ -394,6 +424,16 @@ export class TuiStore {
 
   setPermission(permission: PermissionState | undefined): void {
     this.set({ permission })
+  }
+
+  /** Refresh the live thinking-effort selection; `undefined` hides the indicator (unresolved / no `ctx.llm`), as does an empty `options`. */
+  setReasoningEffort(reasoningEffort: ReasoningEffortState | undefined): void {
+    this.set({ reasoningEffort })
+  }
+
+  /** Flip between full and preview reasoning bodies (`Ctrl+T`); a view preference, so it isn't persisted or logged. */
+  toggleReasoningDetail(): void {
+    this.set({ reasoningExpanded: !this.state.reasoningExpanded })
   }
 
   /** Refresh the session's current goal from the 'goal' session projection; `undefined` when the projection unit isn't composed, `null` before the first create or after a clear. */

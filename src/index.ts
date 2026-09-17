@@ -73,7 +73,7 @@ import { loadFileIndex } from './tui/fileIndex.js'
 import type { TuiActions } from './tui/actions.js'
 import { readPackageName, readPackageVersion } from './version.js'
 import { checkForUpdate } from './updateCheck.js'
-import { clampModelIndex, type ProviderDraft, type ProviderRow, type StoredProviderProfile } from './tui/modelProfile/types.js'
+import { clampModelIndex, type ModelEntry, type ProviderDraft, type ProviderRow, type StoredProviderProfile } from './tui/modelProfile/types.js'
 import type { PluginRow } from './tui/plugins/types.js'
 import type { AgentPresetRow } from './tui/agentPresets/types.js'
 import type { SubagentRow } from './tui/agents/types.js'
@@ -444,6 +444,36 @@ async function run(ctx: Context, config: Config, io: TuiIo, mounted: { instance?
     return overlay.kind === 'modelProfile' ? overlay.modelProfile : undefined
   }
 
+  /**
+   * The catalog shown for one provider in the `/model` picker: the user's
+   * persisted `models` override when present, unioned (by id, persisted first)
+   * with whatever a *registered* adapter already knows about its own route via
+   * `listModels()`. A provider like `github-copilot` ships no stored catalog
+   * but its adapter knows its models, so without this the picker would always
+   * see an empty list and dead-end on the "no models" notice. Dormant routes
+   * (not registered) and any `listModels()` failure fall back to persisted-only.
+   */
+  async function catalogFor(
+    llmSvc: NonNullable<ReturnType<typeof requireModelProfileServices>>['llm'],
+    route: string,
+    isLive: boolean,
+    persisted: readonly ModelEntry[] | undefined,
+  ): Promise<readonly ModelEntry[]> {
+    const catalog: ModelEntry[] = [...(persisted ?? [])]
+    if (!isLive) return catalog
+    try {
+      for (const model of await llmSvc.listModels(route)) {
+        if (!catalog.some(existing => existing.id === model.id)) {
+          catalog.push({ id: model.id, name: model.name })
+        }
+      }
+    } catch {
+      // Adapter can't enumerate this route (unregistered mid-read, or no
+      // catalog knowledge): keep whatever the user persisted.
+    }
+    return catalog
+  }
+
   /** Re-join `ctx.llm`'s provider directory with `ctx.settings`/`ctx.credentials` and refresh the list. */
   async function loadProviders(): Promise<void> {
     const services = requireModelProfileServices()
@@ -491,7 +521,7 @@ async function run(ctx: Context, config: Config, io: TuiIo, mounted: { instance?
         baseURL: value?.baseURL,
         apiKeyRef,
         apiKeyConfigured: info.configured,
-        models: value?.models ?? [],
+        models: await catalogFor(llmSvc, entry.provider, live.has(entry.provider), value?.models),
         revision: descriptor?.revision,
       })
     }
@@ -977,9 +1007,14 @@ async function run(ctx: Context, config: Config, io: TuiIo, mounted: { instance?
       }
     }
 
+    // Hoisted out of `setup` so `actions.cycleReasoningEffort` can mutate the
+    // *same* installed ref live: dsh-agent's `installModelSelection` reads
+    // `selectionRef.current` fresh at each step's prompt assembly, and an
+    // effort-only change takes effect on the next step with no remount and no
+    // injected model-switch notice.
+    const selectionRef: ModelSelectionRef = { current: selection, assembled: undefined }
     const setup = async (agentCtx: Context): Promise<void> => {
-      const selected: ModelSelectionRef = { current: selection, assembled: undefined }
-      installModelSelection(agentCtx, selected)
+      installModelSelection(agentCtx, selectionRef)
       if (presets !== undefined && resolvedPreset !== undefined) await presets.mount(agentCtx, resolvedPreset.id)
     }
     // dsh-agent's own doc calls `dispose` a portable CAPABILITY meant to be
@@ -1008,6 +1043,27 @@ async function run(ctx: Context, config: Config, io: TuiIo, mounted: { instance?
     store.setStatus(agent.status)
     store.setQueued([...agent.inbox.nextStep, ...agent.inbox.nextTurn])
     store.setPermission(permissionState(agent.session))
+    // Resolve the selected model's declared reasoning efforts so the live
+    // thinking-effort indicator (and its Shift+Tab cycle) has an option list.
+    // Best-effort and hidden on failure: a profile without `ctx.llm`, or a
+    // model exposing no efforts, just leaves the indicator unrendered. Writes
+    // to *this* session's `store` directly (not the `current` closure), so a
+    // racing `/clear` can't misroute the resolved result onto another session.
+    const llmForEfforts = ctx.get('llm')
+    if (llmForEfforts !== undefined) {
+      void llmForEfforts
+        .resolveModelInfo(selection.provider, selection.model)
+        .then(info => {
+          store.setReasoningEffort({
+            current: selection.reasoningEffort,
+            options: (info.reasoning?.efforts ?? []).map(effort => ({ id: effort.id, name: effort.name })),
+            defaultEffort: info.reasoning?.defaultEffort,
+          })
+        })
+        .catch(() => {
+          // Best-effort: leave the indicator hidden on any resolve failure.
+        })
+    }
     const initialProjection = projectionValues(agent.session)
     store.setStats(statsSnapshot(initialProjection))
     store.setGoal(goalSnapshot(initialProjection))
@@ -1144,7 +1200,9 @@ async function run(ctx: Context, config: Config, io: TuiIo, mounted: { instance?
       help() {
         const commands = SLASH_COMMANDS.map(c => `  ${c.command.padEnd(SLASH_COMMAND_WIDTH)}  ${c.description}`).join('\n')
         const shortcuts = [
-          '  Shift+Tab       cycle the permission preset',
+          "  Shift+Tab       cycle the model's thinking effort",
+          '  Ctrl+T          show reasoning in full, or collapse it back to a preview',
+          '  Alt+P           cycle the permission preset',
           '  Ctrl+O          open Tool Cards (expand/collapse details)',
           '  !               on an empty prompt, enter shell mode (Enter runs a local command)',
           '  @               open the file-mention dropdown',
@@ -1197,6 +1255,56 @@ async function run(ctx: Context, config: Config, io: TuiIo, mounted: { instance?
         const index = names.indexOf(permissionPresets.current(agent.session))
         // -1 (the `custom` state) + 1 = 0, so an unmatched current value lands on the first preset.
         permissionPresets.set(agent.session, names[(index + 1) % names.length])
+      },
+      toggleReasoningDetail() {
+        store.toggleReasoningDetail()
+      },
+      cycleReasoningEffort() {
+        const llmSvc = ctx.get('llm')
+        if (llmSvc === undefined) {
+          store.setNotice('thinking-effort control is not available in this profile')
+          return
+        }
+        const sel = selectionRef.current
+        if (sel === undefined) return
+        // resolveModelInfo is async (like setActiveModel's saveSelection), so
+        // this fires and forgets, routing every outcome through this session's
+        // own `store`.
+        void llmSvc
+          .resolveModelInfo(sel.provider, sel.model)
+          .then(async (info) => {
+            const efforts = info.reasoning?.efforts ?? []
+            if (efforts.length === 0) {
+              store.setReasoningEffort({ current: sel.reasoningEffort, options: [], defaultEffort: info.reasoning?.defaultEffort })
+              store.setNotice(`${sel.provider}/${sel.model} has no adjustable thinking effort`)
+              return
+            }
+            // Advance from the current effort — or the model's own default when
+            // the selection follows it (current === undefined) — to the next,
+            // wrapping around.
+            let index = efforts.findIndex((effort) => effort.id === sel.reasoningEffort)
+            if (index === -1) index = efforts.findIndex((effort) => effort.id === info.reasoning?.defaultEffort)
+            const next = efforts[(index + 1) % efforts.length]
+            // Live: mutate the installed ref (effort-only, no remount/notice per
+            // dsh-agent's installModelSelection contract), then reflect it in
+            // the indicator right away.
+            selectionRef.current = { ...sel, reasoningEffort: next.id }
+            store.setReasoningEffort({
+              current: next.id,
+              options: efforts.map((effort) => ({ id: effort.id, name: effort.name })),
+              defaultEffort: info.reasoning?.defaultEffort,
+            })
+            store.setNotice(`thinking effort: ${next.name}`)
+            // Persist as the default for future sessions (same provider/model).
+            try {
+              await defaultModel.saveSelection({ provider: sel.provider, model: sel.model, reasoningEffort: next.id })
+            } catch (error: unknown) {
+              store.setNotice(`thinking effort set to ${next.name} for this session, but could not persist: ${error instanceof Error ? error.message : String(error)}`)
+            }
+          })
+          .catch((error: unknown) => {
+            store.setNotice(`failed to change thinking effort: ${error instanceof Error ? error.message : String(error)}`)
+          })
       },
       compact() {
         if (compaction === undefined) {

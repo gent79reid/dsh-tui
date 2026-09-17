@@ -14,7 +14,7 @@ import type { GoalPhase, GoalProjection } from '@deepseek-ai/dsh-goal'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
 import { truncate } from '../render.js'
 import { stripSessionIdPrefix } from '../sessionId.js'
-import type { PermissionState } from './store.js'
+import type { PermissionState, ReasoningEffortState } from './store.js'
 import type { SubagentRow } from './agents/types.js'
 import { theme, fg } from './theme.js'
 
@@ -102,7 +102,22 @@ export function buildPermissionText(permission: PermissionState | undefined): st
   const icon = PERMISSION_ICONS[permission.current] ?? '•'
   const label = PERMISSION_LABELS[permission.current] ?? permission.current
   const color = fg(PERMISSION_COLORS[permission.current] ?? theme.muted)
-  return `${color(`${icon} ${label}`)}${dim(' (shift+tab to cycle)')}`
+  return `${color(`${icon} ${label}`)}${dim(' (alt+p to cycle)')}`
+}
+
+/**
+ * The live thinking-effort indicator, cycled by `Shift+Tab` (pi-agent-style).
+ * Renders nothing when the model exposes no efforts (`options` empty) or before
+ * the resolve lands (`undefined`), so a model without adjustable reasoning shows
+ * no dead row. An `undefined` `current` follows the model's own default effort,
+ * labeled by its name (falling back to `default`).
+ */
+export function buildReasoningEffortText(state: ReasoningEffortState | undefined): string {
+  if (state === undefined || state.options.length === 0) return ''
+  const name = state.current === undefined
+    ? (state.options.find(option => option.id === state.defaultEffort)?.name ?? 'default')
+    : (state.options.find(option => option.id === state.current)?.name ?? state.current)
+  return `${accent(`✦ thinking: ${name}`)}${dim(' (shift+tab to cycle)')}`
 }
 
 /** Per-segment label cap, so one long subagent title can't dominate the strip's single line. */

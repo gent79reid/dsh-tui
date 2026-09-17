@@ -14,6 +14,7 @@ function stubActions(): TuiActions {
     recordHistory: vi.fn(),
     clear: vi.fn(),
     cyclePermission: vi.fn(),
+    cycleReasoningEffort: vi.fn(),
     compact: vi.fn(),
     plan: vi.fn(),
     goal: vi.fn(),

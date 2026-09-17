@@ -8,8 +8,8 @@
  * here, layered on top via `handleInput`/`render` overrides, mirrors the
  * pieces the old `PromptInput.tsx` had to hand-roll because Ink had no
  * equivalent: `Ctrl+O` (Tool Cards toggle), shell mode (a leading `!` on an
- * empty buffer swaps Enter to run a local command), `Shift+Tab` (permission
- * preset cycle), and the two-press Ctrl+C/Ctrl+D exit-arm sequence — all
+ * empty buffer swaps Enter to run a local command), `Shift+Tab` (thinking-effort
+ * cycle) / `Alt+P` (permission preset cycle), and the two-press Ctrl+C/Ctrl+D exit-arm sequence — all
  * short-circuited before `super.handleInput` so Editor's own bindings never
  * see them. Slash-command and `@`-mention completion are *not* hand-rolled
  * here at all: they're a `PromptAutocompleteProvider` (see
@@ -189,8 +189,20 @@ export class CustomEditor extends Editor {
       this.actions.closeAgentDetail()
       return
     }
-    // Shift+Tab cycles the permission preset, mirroring Claude Code's mode switcher.
+    // Shift+Tab cycles the model's thinking/reasoning effort, mirroring pi's mode switcher.
     if (matchesKey(data, 'shift+tab')) {
+      this.actions.cycleReasoningEffort()
+      return
+    }
+    // Ctrl+T expands every Thought block to the model's full reasoning body,
+    // or collapses them back to the one-line preview.
+    if (matchesKey(data, Key.ctrl('t'))) {
+      this.actions.toggleReasoningDetail()
+      return
+    }
+    // Alt+P cycles the permission preset (Shift+Tab's former binding, moved to
+    // make room for the thinking-effort cycle above).
+    if (matchesKey(data, Key.alt('p'))) {
       this.actions.cyclePermission()
       return
     }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { GoalProjection } from '@deepseek-ai/dsh-goal'
 import type { SubagentRow } from '../../src/tui/agents/types.js'
-import { agentsStripIsVisible, buildAgentsStripText, buildGoalBarText, buildTerminalTitle, buildUpdateHintText } from '../../src/tui/liveText.js'
+import { agentsStripIsVisible, buildAgentsStripText, buildGoalBarText, buildReasoningEffortText, buildTerminalTitle, buildUpdateHintText } from '../../src/tui/liveText.js'
 
 /** A minimal 'goal' projection fixture; only the fields the strip reads are meaningful. */
 function projection(over: Partial<GoalProjection['goal']> = {}): GoalProjection {
@@ -226,5 +226,33 @@ describe('buildUpdateHintText', () => {
     expect(text).toContain('0.6.0')
     expect(text).toContain('0.7.0')
     expect(text).toContain('dsh plugin --profile tui add @tomowang/dsh-tui')
+  })
+})
+
+describe('buildReasoningEffortText', () => {
+  const options = [
+    { id: 'low', name: 'Low' },
+    { id: 'high', name: 'High' },
+  ]
+
+  it('renders nothing while unresolved or when the model exposes no efforts', () => {
+    expect(buildReasoningEffortText(undefined)).toBe('')
+    expect(buildReasoningEffortText({ current: undefined, options: [], defaultEffort: undefined })).toBe('')
+  })
+
+  it('labels the selected effort by name and shows the shift+tab hint', () => {
+    const text = buildReasoningEffortText({ current: 'high', options, defaultEffort: 'low' })
+    expect(text).toContain('thinking: High')
+    expect(text).toContain('shift+tab')
+  })
+
+  it("falls back to the model's default effort name when the selection follows it", () => {
+    const text = buildReasoningEffortText({ current: undefined, options, defaultEffort: 'low' })
+    expect(text).toContain('thinking: Low')
+  })
+
+  it('labels an unknown default as "default" rather than a blank', () => {
+    const text = buildReasoningEffortText({ current: undefined, options, defaultEffort: undefined })
+    expect(text).toContain('thinking: default')
   })
 })

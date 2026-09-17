@@ -26,10 +26,16 @@ export function buildToolCallLookup(events: readonly SessionEvent[]): ReadonlyMa
  * terminal lines — a formatted event can itself span multiple lines (e.g. a
  * multi-line user message or an assistant reply). An event `formatEvent`
  * has nothing to show for (`undefined` or `''`) contributes no lines.
+ * `reasoning` carries the reader's current `Ctrl+T` choice through, so a
+ * viewed child's Thought blocks expand with the main transcript's.
  */
-export function buildAgentDetailLines(events: readonly SessionEvent[], getTool: RenderOptions['getTool']): string[] {
+export function buildAgentDetailLines(
+  events: readonly SessionEvent[],
+  getTool: RenderOptions['getTool'],
+  reasoning: RenderOptions['reasoning'] = {},
+): string[] {
   const toolCalls = buildToolCallLookup(events)
-  const options: RenderOptions = { replay: false, getTool, getToolCall: callId => toolCalls.get(callId) }
+  const options: RenderOptions = { replay: false, getTool, getToolCall: callId => toolCalls.get(callId), reasoning }
   const lines: string[] = []
   for (const event of events) {
     const formatted = formatEvent(event, options)

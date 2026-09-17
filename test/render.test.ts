@@ -7,6 +7,7 @@ import {
   formatShellRun,
   formatShellRunLive,
   formatStreamingText,
+  formatToolActivityGroup,
   formatToolCardDetail,
   formatToolCardSummary,
   truncate,
@@ -141,14 +142,16 @@ describe('formatEvent — assistant/message', () => {
     expect(line).toBeUndefined()
   })
 
-  it('collapses reasoning to a one-line summary ahead of the visible text, not the full body', () => {
+  it('collapses reasoning into a bordered Thought block ahead of the visible text', () => {
     const line = formatEvent(
       event('assistant/message', {
         message: { content: [{ type: 'reasoning', text: 'weighing options' }, { type: 'text', text: 'the answer' }] },
       }),
       { replay: false },
     )
-    expect(line).toContain('✦ think ·')
+    expect(line).toContain('╭─ Thought')
+    expect(line).toContain('│ weighing options')
+    expect(line).toContain('╰─')
     expect(line).toContain('weighing options')
     expect(line).toContain('the answer')
     expect(line!.indexOf('weighing options')).toBeLessThan(line!.indexOf('the answer'))
@@ -160,7 +163,7 @@ describe('formatEvent — assistant/message', () => {
       event('assistant/message', { message: { content: [{ type: 'reasoning', text: long }, { type: 'text', text: 'ok' }] } }),
       { replay: false },
     )
-    expect(line).toContain('✦ think ·')
+    expect(line).toContain('╭─ Thought')
     expect(line).not.toContain(long)
     expect(line).toContain('…')
   })
@@ -170,8 +173,56 @@ describe('formatEvent — assistant/message', () => {
       event('assistant/message', { message: { content: [{ type: 'reasoning', text: 'still thinking' }] } }),
       { replay: false },
     )
-    expect(line).toContain('✦ think ·')
+    expect(line).toContain('╭─ Thought')
     expect(line).toContain('still thinking')
+  })
+
+  it('advertises the ctrl+t toggle on the heading only when the preview hides something', () => {
+    const short = formatEvent(
+      event('assistant/message', { message: { content: [{ type: 'reasoning', text: 'brief' }] } }),
+      { replay: false },
+    )
+    expect(short).not.toContain('ctrl+t')
+
+    const long = formatEvent(
+      event('assistant/message', { message: { content: [{ type: 'reasoning', text: 'x'.repeat(200) }] } }),
+      { replay: false },
+    )
+    expect(long).toContain('ctrl+t')
+  })
+
+  it('prints the whole reasoning body, uncapped, once expanded', () => {
+    const body = Array.from({ length: 40 }, (_unused, index) => `step ${index + 1}`).join('\n')
+    const line = formatEvent(
+      event('assistant/message', { message: { content: [{ type: 'reasoning', text: body }, { type: 'text', text: 'the answer' }] } }),
+      { replay: false, reasoning: { expanded: true } },
+    )
+    expect(line).toContain('step 1')
+    expect(line).toContain('step 40')
+    expect(line).not.toContain('…')
+    expect(line).toContain('the answer')
+    expect(line!.indexOf('step 40')).toBeLessThan(line!.indexOf('the answer'))
+  })
+
+  it('wraps an expanded body to the given width, keeping the border glyph on every row', () => {
+    const line = formatEvent(
+      event('assistant/message', { message: { content: [{ type: 'reasoning', text: 'alpha bravo charlie delta echo' }] } }),
+      { replay: false, reasoning: { expanded: true, width: 12 } },
+    )
+    const bodyRows = line!.split('\n').filter(row => row.includes('│'))
+    expect(bodyRows.length).toBeGreaterThan(1)
+    // eslint-disable-next-line no-control-regex -- stripping the block's own violet SGR wrapper to measure the plain row width.
+    const plain = (row: string): string => row.replace(/\x1b\[[0-9;]*m/g, '').trimEnd()
+    for (const row of bodyRows) expect(plain(row).length).toBeLessThanOrEqual(14)
+  })
+
+  it('breaks a word longer than the wrap width rather than overflowing it', () => {
+    const line = formatEvent(
+      event('assistant/message', { message: { content: [{ type: 'reasoning', text: 'y'.repeat(40) }] } }),
+      { replay: false, reasoning: { expanded: true, width: 10 } },
+    )
+    const bodyRows = line!.split('\n').filter(row => row.includes('│'))
+    expect(bodyRows).toHaveLength(4)
   })
 })
 
@@ -199,6 +250,25 @@ describe('formatStreamingText', () => {
   it('defaults the spinner character when none is passed', () => {
     const result = formatStreamingText('', 'thinking it through')
     expect(result).toContain('✦ thinking')
+  })
+
+  it('shows the live reasoning body in a spinning Thought block once expanded', () => {
+    const result = formatStreamingText('', 'weighing options', '⠋', { expanded: true })
+    expect(result).toContain('╭─ Thought ⠋')
+    expect(result).toContain('│ weighing options')
+  })
+
+  it('keeps only the newest lines of a long live body, marking the dropped head', () => {
+    const body = Array.from({ length: 20 }, (_unused, index) => `step ${index + 1}`).join('\n')
+    const result = formatStreamingText('', body, '⠋', { expanded: true })
+    expect(result).toContain('│ …')
+    expect(result).toContain('step 20')
+    expect(result).not.toContain('step 1\n')
+    expect(result!.split('\n').filter(row => row.includes('step ')).length).toBe(8)
+  })
+
+  it('still yields to visible text once it starts streaming, even while expanded', () => {
+    expect(formatStreamingText('answer', 'weighing options', '⠋', { expanded: true })).toBe('\nanswer\n')
   })
 })
 
@@ -659,6 +729,77 @@ describe('formatToolCardDetail / formatToolCardSummary', () => {
     })
     expect(summary).toContain('read_file')
     expect(summary.includes('\n')).toBe(false)
+  })
+})
+
+describe('formatToolActivityGroup', () => {
+  function callEvent(callId: string, name: string, argumentsText: string, time = 100): Extract<SessionEvent, { type: 'tool/call' }> {
+    return { type: 'tool/call', seq: 1, time, data: { callId, name, arguments: argumentsText } } as Extract<SessionEvent, { type: 'tool/call' }>
+  }
+
+  function timedResult(callId: string, time = 350): Extract<SessionEvent, { type: 'tool/result' }> {
+    return {
+      ...resultEvent(callId, [{ type: 'text', text: 'ok' }], false),
+      time,
+    } as Extract<SessionEvent, { type: 'tool/result' }>
+  }
+
+  it('groups calls under a compact verb-and-count heading', () => {
+    const read = fakeTool({
+      presentCall: () => ({ card: 'generic', title: 'Read src/a.ts', kind: 'read' }),
+      presentResult: () => ({ card: 'read', path: 'src/a.ts', offset: 1, lines: [{ number: 1, text: 'a' }], totalLines: 1 }),
+    })
+    const options: RenderOptions = {
+      replay: false,
+      getTool: toolResolver('read_file', read),
+      getToolCall: callResolver('read-1', { name: 'read_file', arguments: '{}' }),
+    }
+    const text = formatToolActivityGroup([{ call: callEvent('read-1', 'read_file', '{}'), result: timedResult('read-1') }], options)
+    expect(text).toContain('Read')
+    expect(text).toContain('1 file')
+    expect(text).toContain('src/a.ts')
+    expect(text).toContain('250ms')
+  })
+
+  it('shows pending calls with the supplied spinner frame', () => {
+    const text = formatToolActivityGroup(
+      [{ call: callEvent('call-1', 'grep', '{"pattern":"todo"}'), result: undefined }],
+      { replay: false },
+      '⠋',
+    )
+    expect(text).toContain('⠋')
+    expect(text).toContain('grep')
+  })
+
+  it('folds older calls while keeping the newest four inline', () => {
+    const entries = Array.from({ length: 6 }, (_unused, index) => ({
+      call: callEvent(`call-${index}`, 'read_file', `{"path":"file-${index}.ts"}`),
+      result: undefined,
+    }))
+    const text = formatToolActivityGroup(entries, { replay: false }, '⠋')
+    expect(text).toContain('2 earlier items hidden')
+    expect(text).not.toContain('file-0.ts')
+    expect(text).toContain('file-5.ts')
+    expect(text).toContain('Ctrl+O to expand')
+  })
+
+  it('renders terminal calls as commands with capped output', () => {
+    const tool = fakeTool({
+      presentCall: () => ({ card: 'terminal', title: 'pnpm test' }),
+      presentResult: () => ({ card: 'terminal', output: 'one\ntwo\nthree\nfour\nfive', exitCode: 0 }),
+    })
+    const text = formatToolActivityGroup(
+      [{ call: callEvent('shell-1', 'bash', '{}', 100), result: timedResult('shell-1', 1600) }],
+      {
+        replay: false,
+        getTool: toolResolver('bash', tool),
+        getToolCall: callResolver('shell-1', { name: 'bash', arguments: '{}' }),
+      },
+    )
+    expect(text).toContain('$ pnpm test')
+    expect(text).toContain('1.5s')
+    expect(text).toContain('2 more lines')
+    expect(text).not.toContain('five')
   })
 })
 

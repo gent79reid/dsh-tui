@@ -26,8 +26,12 @@ export interface TuiActions {
   recordHistory(line: string): void
   /** Flush the current session, then start a brand-new one in a fresh screen. */
   clear(): void
-  /** Switch to the next permission preset (read-only/workspace-write/full-access), wrapping around. */
+  /** Switch to the next permission preset (read-only/workspace-write/full-access), wrapping around. Bound to `Alt+P`. */
   cyclePermission(): void
+  /** Switch to the next thinking/reasoning effort of the selected model (pi-agent-style), wrapping around, applied live and persisted as the default. Bound to `Shift+Tab`. No-op with a notice when the model exposes no efforts or `ctx.llm` isn't composed. */
+  cycleReasoningEffort(): void
+  /** Show reasoning bodies in full instead of as a one-line preview, or collapse them again. Bound to `Ctrl+T`; applies to every Thought block at once, settled and streaming alike. */
+  toggleReasoningDetail(): void
   /** Manually trigger session-history compaction via `ctx.compaction`. */
   compact(): void
   /** Enter plan mode (optionally steering `rawInput` as its first message), or `off` to leave it, via `ctx.planMode`. */

@@ -26,6 +26,41 @@ export function createTranscriptLine(text: string): Component {
   return new Text(text, TRANSCRIPT_MARGIN, 0)
 }
 
+/** Width available to transcript content once the left/right margin is taken out — what a formatter needs to know to wrap its own lines to the same column `padTranscriptText`/`createTranscriptLine` would. */
+export function transcriptContentWidth(width: number): number {
+  return Math.max(1, width - TRANSCRIPT_MARGIN * 2)
+}
+
+/**
+ * A transcript row whose text depends on one piece of mutable view state
+ * (today: whether reasoning bodies are expanded, `Ctrl+T`). Re-formats only
+ * when that state or the width actually changes, so it keeps
+ * `createTranscriptLine`'s cheap-repaint property: a streaming token delta
+ * notifies every subscriber, but it must not re-run Markdown rendering and
+ * wrapping for every settled message already in the transcript.
+ */
+export class StatefulTranscriptLine<K> implements Component {
+  private cache: { key: K; width: number; lines: string[] } | undefined
+
+  constructor(
+    private readonly readKey: () => K,
+    private readonly build: (key: K, width: number) => string,
+  ) {}
+
+  invalidate(): void {
+    this.cache = undefined
+  }
+
+  render(width: number): string[] {
+    const key = this.readKey()
+    const cached = this.cache
+    if (cached !== undefined && cached.key === key && cached.width === width) return cached.lines
+    const lines = padTranscriptText(this.build(key, width), width)
+    this.cache = { key, width, lines }
+    return lines
+  }
+}
+
 /** A block of pre-styled text rebuilt from the current viewport width on every render — for content (the banner) whose own layout is width-responsive. */
 export class DynamicText implements Component {
   constructor(private readonly build: (width: number) => string) {}
